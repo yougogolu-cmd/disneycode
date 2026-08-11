@@ -1,7 +1,7 @@
 {
-  "name": "disney-code-viewer",
+  "name": "auth-code-viewer",
   "version": "1.0.0",
-  "description": "Disney+ 인증번호 확인 — 외부 페이지에서 6자리 코드를 추출해 한국어 모바일 UI로 표시",
+  "description": "외부 페이지에서 6자리 인증번호를 추출해 한국어 모바일 UI로 표시",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",

@@ -93,7 +93,7 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>Disney+ 인증번호 확인</title>
+  <title>인증번호 확인</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -273,7 +273,7 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
 <body>
   <div class="container">
     <header class="header">
-      <div class="logo">Disney+ 인증번호 확인</div>
+      <div class="logo">인증번호 확인</div>
       <p class="notice">인증번호 수신까지 10~30초 소요됩니다. 10초마다 자동으로 업데이트됩니다.</p>
     </header>
 
@@ -420,7 +420,7 @@ app.get('/', (_req, res) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Disney+ 인증번호 확인</title>
+      <title>인증번호 확인</title>
       <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -478,7 +478,7 @@ app.get('/', (_req, res) => {
     </head>
     <body>
       <div class="box">
-        <h1>Disney+ 인증번호 확인</h1>
+        <h1>인증번호 확인</h1>
         <p class="desc">토큰을 입력하면 손님에게 보낼 링크가 자동으로 만들어집니다.</p>
 
         <div class="field">
