@@ -559,6 +559,15 @@ function renderDashboardPage() {
     .link-action.copy { color: var(--accent); }
     .link-action.open { color: var(--muted); }
     .link-action.delete { color: #ff3b30; }
+    .saved-creds {
+      font-size: 0.75rem; color: var(--muted); margin-bottom: 6px;
+    }
+    .saved-creds span { color: var(--text); font-weight: 500; }
+    .type-tag {
+      display: inline-block; font-size: 0.625rem; font-weight: 600;
+      color: var(--muted); background: #f5f5f7; border-radius: 4px;
+      padding: 2px 6px; margin-bottom: 8px;
+    }
     .empty { text-align: center; color: var(--muted); font-size: 0.8125rem; padding: 24px 0; }
   </style>
 </head>
@@ -569,14 +578,14 @@ function renderDashboardPage() {
       <form method="POST" action="/logout"><button type="submit" class="logout-btn">로그아웃</button></form>
     </div>
 
-    <h1 class="title">링크 만들기</h1>
-    <p class="subtitle">토큰으로 손님용 링크를 생성·저장합니다</p>
+    <h1 class="title">링크 관리</h1>
 
+    <p class="section-title" style="margin-top:0">① 토큰으로 만들기</p>
     <label class="field-label" for="token-input">토큰</label>
     <input class="input" id="token-input" type="text" placeholder="토큰 입력" autocomplete="off" autocapitalize="off" spellcheck="false" />
 
-    <label class="field-label" for="label-input" style="margin-top:20px">메모 (선택)</label>
-    <input class="input" id="label-input" type="text" placeholder="예: 홍길동 손님" autocomplete="off" />
+    <label class="field-label" for="label-input" style="margin-top:16px">메모 (선택)</label>
+    <input class="input" id="label-input" type="text" placeholder="예: 홍길동" autocomplete="off" />
 
     <div class="link-preview" id="preview">
       <p class="link-preview-label">생성된 링크</p>
@@ -584,12 +593,31 @@ function renderDashboardPage() {
     </div>
 
     <div class="btn-row">
-      <button type="button" class="btn btn-primary" id="save-btn" disabled>링크 저장</button>
+      <button type="button" class="btn btn-primary" id="save-btn" disabled>저장</button>
       <button type="button" class="btn btn-text" id="copy-btn" disabled>복사</button>
     </div>
 
     <div class="section">
-      <p class="section-title">저장된 링크</p>
+      <p class="section-title">② 직접 입력해서 저장</p>
+      <label class="field-label" for="custom-label">메모 (선택)</label>
+      <input class="input" id="custom-label" type="text" placeholder="예: A손님" autocomplete="off" />
+
+      <label class="field-label" for="custom-url" style="margin-top:16px">링크 주소</label>
+      <input class="input" id="custom-url" type="url" placeholder="https://www.keyview.online/code/..." autocomplete="off" autocapitalize="off" spellcheck="false" />
+
+      <label class="field-label" for="custom-id" style="margin-top:16px">아이디 (선택)</label>
+      <input class="input" id="custom-id" type="text" placeholder="아이디" autocomplete="off" autocapitalize="off" />
+
+      <label class="field-label" for="custom-pass" style="margin-top:16px">비밀번호 (선택)</label>
+      <input class="input" id="custom-pass" type="text" placeholder="비밀번호" autocomplete="off" />
+
+      <div class="btn-row">
+        <button type="button" class="btn btn-primary" id="custom-save-btn">직접 저장</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">저장 목록</p>
       <div class="saved-list" id="saved-list">
         <p class="empty">불러오는 중…</p>
       </div>
@@ -605,10 +633,23 @@ function renderDashboardPage() {
     const previewLink = document.getElementById('preview-link');
     const saveBtn = document.getElementById('save-btn');
     const copyBtn = document.getElementById('copy-btn');
+    const customLabel = document.getElementById('custom-label');
+    const customUrl = document.getElementById('custom-url');
+    const customId = document.getElementById('custom-id');
+    const customPass = document.getElementById('custom-pass');
+    const customSaveBtn = document.getElementById('custom-save-btn');
     const savedList = document.getElementById('saved-list');
     const toast = document.getElementById('toast');
 
     let currentLink = '';
+
+    function esc(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
 
     function extractToken(raw) {
       const value = raw.trim();
@@ -664,20 +705,34 @@ function renderDashboardPage() {
 
     function renderSavedLinks(links) {
       if (!links.length) {
-        savedList.innerHTML = '<p class="empty">저장된 링크가 없습니다</p>';
+        savedList.innerHTML = '<p class="empty">저장된 항목이 없습니다</p>';
         return;
       }
       savedList.innerHTML = links.map(function(item) {
-        var label = item.label ? '<p class="saved-label">' + item.label + '</p>' : '';
-        return '<div class="saved-item" data-id="' + item.id + '">' +
-          label +
-          '<p class="saved-url">' + item.url + '</p>' +
+        var tag = item.type === 'custom'
+          ? '<span class="type-tag">직접입력</span>'
+          : '<span class="type-tag">토큰</span>';
+        var label = item.label ? '<p class="saved-label">' + esc(item.label) + '</p>' : '';
+        var creds = '';
+        if (item.loginId) {
+          creds += '<p class="saved-creds">아이디: <span>' + esc(item.loginId) + '</span></p>';
+        }
+        if (item.loginPassword) {
+          creds += '<p class="saved-creds">비밀번호: <span>' + esc(item.loginPassword) + '</span></p>';
+        }
+        var actions = '<button type="button" class="link-action copy" data-copy="' + esc(item.url) + '">링크복사</button>';
+        if (item.loginId) {
+          actions += '<button type="button" class="link-action copy" data-copy="' + esc(item.loginId) + '">아이디복사</button>';
+        }
+        if (item.loginPassword) {
+          actions += '<button type="button" class="link-action copy" data-copy="' + esc(item.loginPassword) + '">비번복사</button>';
+        }
+        actions += '<button type="button" class="link-action open" data-url="' + esc(item.url) + '">열기</button>';
+        actions += '<button type="button" class="link-action delete" data-id="' + esc(item.id) + '">삭제</button>';
+        return '<div class="saved-item">' + tag + label +
+          '<p class="saved-url">' + esc(item.url) + '</p>' + creds +
           '<p class="saved-meta">' + formatDate(item.createdAt) + '</p>' +
-          '<div class="saved-actions">' +
-          '<button type="button" class="link-action copy" data-url="' + item.url + '">복사</button>' +
-          '<button type="button" class="link-action open" data-url="' + item.url + '">열기</button>' +
-          '<button type="button" class="link-action delete" data-id="' + item.id + '">삭제</button>' +
-          '</div></div>';
+          '<div class="saved-actions">' + actions + '</div></div>';
       }).join('');
     }
 
@@ -710,15 +765,47 @@ function renderDashboardPage() {
       }
     });
 
+    customSaveBtn.addEventListener('click', async function() {
+      const url = customUrl.value.trim();
+      if (!url) { showToast('링크를 입력하세요'); return; }
+      customSaveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: url,
+            label: customLabel.value.trim(),
+            loginId: customId.value.trim(),
+            loginPassword: customPass.value.trim(),
+            type: 'custom',
+          }),
+        });
+        if (res.status === 401) { location.href = '/login'; return; }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'save failed');
+        customLabel.value = '';
+        customUrl.value = '';
+        customId.value = '';
+        customPass.value = '';
+        showToast('저장되었습니다');
+        loadLinks();
+      } catch (e) {
+        showToast(e.message === 'save failed' ? '저장 실패' : (e.message || '저장 실패'));
+      } finally {
+        customSaveBtn.disabled = false;
+      }
+    });
+
     copyBtn.addEventListener('click', function() {
       if (currentLink) copyText(currentLink);
     });
 
     savedList.addEventListener('click', async function(e) {
-      const copyEl = e.target.closest('.copy');
+      const copyEl = e.target.closest('[data-copy]');
       const openEl = e.target.closest('.open');
       const deleteEl = e.target.closest('.delete');
-      if (copyEl) return copyText(copyEl.dataset.url);
+      if (copyEl) return copyText(copyEl.getAttribute('data-copy'));
       if (openEl) return void (location.href = openEl.dataset.url);
       if (deleteEl) {
         if (!confirm('삭제할까요?')) return;
@@ -769,14 +856,47 @@ app.get('/api/links', requireAuth, async (_req, res) => {
 });
 
 app.post('/api/links', requireAuth, async (req, res) => {
+  const label = String(req.body?.label || '').trim();
+  const loginId = String(req.body?.loginId || '').trim();
+  const loginPassword = String(req.body?.loginPassword || '').trim();
+
+  if (req.body?.type === 'custom' || req.body?.url) {
+    const url = String(req.body?.url || '').trim();
+    if (!url) return res.status(400).json({ error: '링크를 입력하세요.' });
+    try {
+      const parsed = new URL(url);
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return res.status(400).json({ error: 'http 또는 https 링크만 저장할 수 있습니다.' });
+      }
+    } catch {
+      return res.status(400).json({ error: '올바른 링크 형식이 아닙니다.' });
+    }
+
+    try {
+      const entry = await linkStorage.addLink({
+        url,
+        label,
+        loginId,
+        loginPassword,
+        type: 'custom',
+      });
+      return res.status(201).json({ link: entry });
+    } catch {
+      return res.status(500).json({ error: '링크를 저장하지 못했습니다.' });
+    }
+  }
+
   const token = extractToken(req.body?.token);
-  if (!token) return res.status(400).json({ error: '토큰이 필요합니다.' });
+  if (!token) return res.status(400).json({ error: '토큰 또는 링크가 필요합니다.' });
 
   try {
     const entry = await linkStorage.addLink({
       token,
       url: buildGuestLink(req, token),
-      label: String(req.body?.label || '').trim(),
+      label,
+      loginId,
+      loginPassword,
+      type: 'token',
     });
     res.status(201).json({ link: entry });
   } catch {

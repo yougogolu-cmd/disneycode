@@ -3,3 +3,7 @@ node_modules/
 .vercel
 *.log
 data/
+VERCEL-CREDENTIALS.txt
+
+.vercel
+.env*
