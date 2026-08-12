@@ -1,6 +1,16 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
+const cookieParser = require('cookie-parser');
+const {
+  authenticate,
+  createToken,
+  setAuthCookie,
+  clearAuthCookie,
+  getSessionUser,
+  requireAuth,
+} = require('./lib/auth');
+const linkStorage = require('./lib/storage');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,6 +19,11 @@ const CODE_REGEX = /\b\d{6}\b/;
 const POLL_INTERVAL_MS = 10000;
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+app.use(cookieParser());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.set('trust proxy', 1);
 
 function extractSixDigitCode(raw) {
   if (raw == null || raw === '') return null;
@@ -79,11 +94,164 @@ async function fetchAuthCode(token) {
   }
 }
 
+function getSharedStyles() {
+  return `
+    :root {
+      --bg: #ffffff;
+      --text: #111111;
+      --muted: #8e8e93;
+      --line: #f0f0f0;
+      --accent: #007aff;
+      --radius: 14px;
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+      min-height: 100dvh;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+      padding: calc(20px + var(--safe-t)) 20px calc(28px + var(--safe-b));
+      display: flex;
+      flex-direction: column;
+    }
+    .page {
+      width: 100%;
+      max-width: 360px;
+      margin: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .site {
+      text-align: center;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      margin-bottom: 32px;
+    }
+    .title {
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      text-align: center;
+      margin-bottom: 6px;
+    }
+    .subtitle {
+      font-size: 0.8125rem;
+      color: var(--muted);
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .field-label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .input {
+      width: 100%;
+      border: none;
+      border-bottom: 1.5px solid var(--line);
+      border-radius: 0;
+      padding: 12px 0;
+      font-size: 16px;
+      background: transparent;
+      color: var(--text);
+      transition: border-color 0.2s;
+    }
+    .input:focus {
+      outline: none;
+      border-bottom-color: var(--accent);
+    }
+    .input::placeholder { color: #c7c7cc; }
+    .btn {
+      appearance: none;
+      border: none;
+      border-radius: var(--radius);
+      min-height: 50px;
+      width: 100%;
+      padding: 14px 20px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .btn:active { opacity: 0.7; }
+    .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-text {
+      background: none;
+      color: var(--muted);
+      min-height: 44px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      width: auto;
+      margin: 0 auto;
+      display: block;
+    }
+    .btn-row { display: flex; flex-direction: column; gap: 8px; margin-top: 28px; }
+    .link-preview {
+      margin-top: 28px;
+      padding-top: 28px;
+      border-top: 1px solid var(--line);
+      display: none;
+    }
+    .link-preview.show { display: block; }
+    .link-preview-label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+    .link-preview-url {
+      font-size: 0.8125rem;
+      line-height: 1.55;
+      word-break: break-all;
+      color: var(--text);
+      margin-bottom: 16px;
+    }
+    .link-actions { display: flex; flex-direction: column; gap: 8px; }
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(24px + var(--safe-b));
+      transform: translateX(-50%) translateY(12px);
+      background: rgba(17, 17, 17, 0.88);
+      backdrop-filter: blur(8px);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 999px;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      z-index: 100;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  `;
+}
+
+function renderDigitBoxes(code) {
+  if (!code) {
+    return '<div class="waiting"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>';
+  }
+  const digits = code.split('').map(
+    (d) => `<span class="digit">${d}</span>`
+  ).join('');
+  return `<div class="code-digits">${digits}</div>`;
+}
+
 function renderPage({ code, token, updatedAt, errorMessage }) {
   const safeCode = code || '';
   const hasCode = Boolean(code);
-  const displayCode = hasCode ? code : '대기 중';
-  const cardClass = hasCode ? 'code-card' : 'code-card waiting';
   const updatedLabel = updatedAt
     ? new Date(updatedAt).toLocaleString('ko-KR', { hour12: false })
     : '';
@@ -93,202 +261,88 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <title>인증번호 확인</title>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
-      min-height: 100vh;
-      background: linear-gradient(160deg, #0b1633 0%, #1a2a5e 45%, #0f1f4a 100%);
-      color: #f5f7ff;
+    ${getSharedStyles()}
+    .code-area {
+      text-align: center;
+      padding: 40px 0 16px;
+      min-height: 100px;
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 24px 16px;
     }
-
-    .container {
-      width: 100%;
-      max-width: 420px;
+    .code-digits {
+      display: flex;
+      gap: clamp(8px, 3vw, 14px);
+      justify-content: center;
     }
-
-    .header {
-      text-align: center;
-      margin-bottom: 28px;
-    }
-
-    .logo {
-      display: inline-block;
-      font-size: 1.5rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      margin-bottom: 12px;
-    }
-
-    .notice {
-      font-size: 0.9rem;
-      line-height: 1.6;
-      color: rgba(245, 247, 255, 0.78);
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 12px;
-      padding: 14px 16px;
-    }
-
-    .card-wrap {
-      margin-bottom: 24px;
-    }
-
-    .code-card {
-      background: #ffffff;
-      color: #0b1633;
-      border-radius: 20px;
-      padding: 36px 24px;
-      text-align: center;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-      transition: background 0.3s ease, color 0.3s ease;
-    }
-
-    .code-card.waiting {
-      background: rgba(255, 255, 255, 0.12);
-      color: #f5f7ff;
-      border: 1px dashed rgba(255, 255, 255, 0.25);
-      box-shadow: none;
-    }
-
-    .code-label {
-      font-size: 0.85rem;
+    .digit {
+      font-size: clamp(2rem, 9vw, 2.75rem);
       font-weight: 600;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #64748b;
-      margin-bottom: 12px;
-    }
-
-    .code-card.waiting .code-label {
-      color: rgba(245, 247, 255, 0.65);
-    }
-
-    .code-value {
-      font-size: clamp(2.5rem, 12vw, 3.5rem);
-      font-weight: 800;
-      letter-spacing: 0.35em;
       font-variant-numeric: tabular-nums;
-      padding-left: 0.35em;
-      transition: opacity 0.2s ease;
+      letter-spacing: -0.02em;
+      color: var(--text);
     }
-
-    .code-card.waiting .code-value {
-      letter-spacing: 0.05em;
-      font-size: 1.75rem;
-      font-weight: 600;
+    .code-digits.flash .digit {
+      animation: fadeIn 0.35s ease;
     }
-
-    .code-value.flash {
-      animation: flash 0.6s ease;
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
     }
-
-    @keyframes flash {
-      0% { opacity: 0.4; transform: scale(0.98); }
-      100% { opacity: 1; transform: scale(1); }
+    .waiting {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      justify-content: center;
+      height: 48px;
     }
-
+    .dot {
+      width: 7px; height: 7px;
+      background: #d1d1d6;
+      border-radius: 50%;
+      animation: bounce 1.2s ease-in-out infinite;
+    }
+    .dot:nth-child(2) { animation-delay: 0.15s; }
+    .dot:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce {
+      0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+      40% { opacity: 1; transform: scale(1); }
+    }
     .status {
-      margin-top: 12px;
-      font-size: 0.8rem;
-      color: rgba(245, 247, 255, 0.55);
       text-align: center;
+      font-size: 0.75rem;
+      color: var(--muted);
       min-height: 1.2em;
     }
-
     .error {
-      margin-top: 14px;
-      font-size: 0.85rem;
-      color: #fecaca;
+      margin-top: 8px;
+      font-size: 0.8125rem;
+      color: #ff3b30;
       text-align: center;
-    }
-
-    .actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    .btn {
-      appearance: none;
-      border: none;
-      border-radius: 14px;
-      padding: 16px 12px;
-      font-size: 0.95rem;
-      font-weight: 700;
-      cursor: pointer;
-      transition: transform 0.15s ease, opacity 0.15s ease;
-    }
-
-    .btn:active {
-      transform: scale(0.97);
-    }
-
-    .btn-primary {
-      background: #ffffff;
-      color: #0b1633;
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.14);
-      color: #f5f7ff;
-      border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-
-    .btn:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    .toast {
-      position: fixed;
-      left: 50%;
-      bottom: 32px;
-      transform: translateX(-50%) translateY(20px);
-      background: #22c55e;
-      color: #fff;
-      padding: 12px 20px;
-      border-radius: 999px;
-      font-size: 0.9rem;
-      font-weight: 600;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.25s ease, transform 0.25s ease;
-      z-index: 100;
-      white-space: nowrap;
-    }
-
-    .toast.show {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
+      line-height: 1.45;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <header class="header">
-      <div class="logo">인증번호 확인</div>
-      <p class="notice">인증번호 수신까지 10~30초 소요됩니다. 10초마다 자동으로 업데이트됩니다.</p>
-    </header>
+  <div class="page">
+    <p class="site">keyview.online</p>
+    <h1 class="title">인증번호</h1>
+    <p class="subtitle">앱에 아래 번호를 입력하세요</p>
 
-    <div class="card-wrap">
-      <div class="${cardClass}" id="code-card">
-        <div class="code-label">인증번호</div>
-        <div class="code-value" id="auth-code">${displayCode}</div>
-      </div>
-      <p class="status" id="status-text">${updatedLabel ? `마지막 확인: ${updatedLabel}` : '확인 중…'}</p>
-      ${errorMessage ? `<p class="error" id="error-text">${errorMessage}</p>` : '<p class="error" id="error-text" style="display:none"></p>'}
+    <div class="code-area">
+      <div id="auth-code">${renderDigitBoxes(code)}</div>
     </div>
 
-    <div class="actions">
-      <button type="button" class="btn btn-secondary" id="refresh-btn">새로고침</button>
-      <button type="button" class="btn btn-primary" id="copy-btn" ${hasCode ? '' : 'disabled'}>인증번호 복사</button>
+    <p class="status" id="status-text">${updatedLabel ? updatedLabel : '확인 중'}</p>
+    ${errorMessage ? `<p class="error" id="error-text">${errorMessage}</p>` : '<p class="error" id="error-text" style="display:none"></p>'}
+
+    <div class="btn-row">
+      <button type="button" class="btn btn-primary" id="copy-btn" ${hasCode ? '' : 'disabled'}>복사</button>
+      <button type="button" class="btn btn-text" id="refresh-btn">새로고침</button>
     </div>
   </div>
 
@@ -301,37 +355,45 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
     let pollTimer = null;
 
     const codeEl = document.getElementById('auth-code');
-    const cardEl = document.getElementById('code-card');
     const copyBtn = document.getElementById('copy-btn');
     const refreshBtn = document.getElementById('refresh-btn');
     const statusEl = document.getElementById('status-text');
     const errorEl = document.getElementById('error-text');
     const toast = document.getElementById('toast');
 
+    function renderDigits(code) {
+      if (!code) {
+        return '<div class="waiting"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>';
+      }
+      return '<div class="code-digits">' + code.split('').map(function(d) {
+        return '<span class="digit">' + d + '</span>';
+      }).join('') + '</div>';
+    }
+
     function showToast(message) {
       toast.textContent = message;
       toast.classList.add('show');
-      setTimeout(() => toast.classList.remove('show'), 2500);
+      setTimeout(function() { toast.classList.remove('show'); }, 2500);
     }
 
     function setWaiting() {
-      cardEl.className = 'code-card waiting';
-      codeEl.textContent = '대기 중';
+      codeEl.innerHTML = renderDigits(null);
       copyBtn.disabled = true;
     }
 
     function setCode(code, updatedAt) {
       currentCode = code;
-      cardEl.className = 'code-card';
-      codeEl.textContent = code;
-      codeEl.classList.remove('flash');
-      void codeEl.offsetWidth;
-      codeEl.classList.add('flash');
+      codeEl.innerHTML = renderDigits(code);
+      var digits = codeEl.querySelector('.code-digits');
+      if (digits) {
+        digits.classList.remove('flash');
+        void digits.offsetWidth;
+        digits.classList.add('flash');
+      }
       copyBtn.disabled = false;
 
       if (updatedAt) {
-        const date = new Date(updatedAt);
-        statusEl.textContent = '마지막 확인: ' + date.toLocaleString('ko-KR', { hour12: false });
+        statusEl.textContent = new Date(updatedAt).toLocaleString('ko-KR', { hour12: false });
       } else {
         statusEl.textContent = '방금 확인됨';
       }
@@ -353,7 +415,7 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
             errorEl.textContent = data.error;
           }
           setWaiting();
-          statusEl.textContent = '확인 중…';
+          statusEl.textContent = '확인 중';
           return;
         }
 
@@ -361,12 +423,11 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
           if (data.code !== currentCode) {
             setCode(data.code, data.updatedAt);
           } else if (data.updatedAt) {
-            const date = new Date(data.updatedAt);
-            statusEl.textContent = '마지막 확인: ' + date.toLocaleString('ko-KR', { hour12: false });
+            statusEl.textContent = new Date(data.updatedAt).toLocaleString('ko-KR', { hour12: false });
           }
         } else {
           setWaiting();
-          statusEl.textContent = '확인 중…';
+          statusEl.textContent = '확인 중';
         }
       } catch {
         if (errorEl) {
@@ -381,20 +442,17 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
       pollTimer = setInterval(pollCode, POLL_MS);
     }
 
-    refreshBtn.addEventListener('click', () => {
+    refreshBtn.addEventListener('click', function() {
       refreshBtn.disabled = true;
-      pollCode().finally(() => {
-        refreshBtn.disabled = false;
-      });
+      pollCode().finally(function() { refreshBtn.disabled = false; });
     });
 
-    copyBtn.addEventListener('click', async () => {
+    copyBtn.addEventListener('click', async function() {
       if (!currentCode) return;
-
       try {
         await navigator.clipboard.writeText(currentCode);
       } catch {
-        const textarea = document.createElement('textarea');
+        var textarea = document.createElement('textarea');
         textarea.value = currentCode;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
@@ -403,8 +461,7 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
         document.execCommand('copy');
         document.body.removeChild(textarea);
       }
-
-      showToast('인증번호가 복사되었습니다!');
+      showToast('복사되었습니다');
     });
 
     startPolling();
@@ -413,164 +470,328 @@ function renderPage({ code, token, updatedAt, errorMessage }) {
 </html>`;
 }
 
-app.get('/', (_req, res) => {
-  res.status(200).send(`
-    <!DOCTYPE html>
-    <html lang="ko">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>인증번호 확인</title>
-      <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
-          min-height: 100vh; padding: 24px 16px;
-          background: linear-gradient(160deg, #0b1633 0%, #1a2a5e 45%, #0f1f4a 100%);
-          color: #f5f7ff; display: flex; align-items: center; justify-content: center;
-        }
-        .box { width: 100%; max-width: 440px; }
-        h1 { font-size: 1.5rem; margin-bottom: 8px; text-align: center; }
-        .desc {
-          color: rgba(245,247,255,0.78); line-height: 1.6; margin-bottom: 24px;
-          text-align: center; font-size: 0.92rem;
-        }
-        .field { margin-bottom: 14px; text-align: left; }
-        .field label {
-          display: block; font-size: 0.82rem; font-weight: 600;
-          color: rgba(245,247,255,0.65); margin-bottom: 8px;
-        }
-        input {
-          width: 100%; border: 1px solid rgba(255,255,255,0.2); border-radius: 12px;
-          padding: 14px; font-size: 1rem; background: rgba(255,255,255,0.1); color: #fff;
-        }
-        input::placeholder { color: rgba(255,255,255,0.45); }
-        input:focus { outline: none; border-color: rgba(255,255,255,0.45); }
-        .result {
-          margin-top: 20px; padding: 16px; border-radius: 14px;
-          background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
-          display: none;
-        }
-        .result.show { display: block; }
-        .result-label { font-size: 0.8rem; color: rgba(245,247,255,0.55); margin-bottom: 8px; }
-        .result-link {
-          word-break: break-all; font-size: 0.9rem; line-height: 1.5;
-          color: #fff; margin-bottom: 14px;
-        }
-        .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .btn {
-          border: none; border-radius: 12px; padding: 14px 12px;
-          font-size: 0.92rem; font-weight: 700; cursor: pointer; text-align: center;
-        }
-        .btn-primary { background: #fff; color: #0b1633; }
-        .btn-secondary {
-          background: rgba(255,255,255,0.14); color: #f5f7ff;
-          border: 1px solid rgba(255,255,255,0.2);
-        }
-        .toast {
-          position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%) translateY(20px);
-          background: #22c55e; color: #fff; padding: 12px 20px; border-radius: 999px;
-          font-size: 0.9rem; font-weight: 600; opacity: 0; pointer-events: none;
-          transition: opacity 0.25s ease, transform 0.25s ease; white-space: nowrap;
-        }
-        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-      </style>
-    </head>
-    <body>
-      <div class="box">
-        <h1>인증번호 확인</h1>
-        <p class="desc">토큰을 입력하면 손님에게 보낼 링크가 자동으로 만들어집니다.</p>
+function extractToken(raw) {
+  const value = String(raw || '').trim();
+  if (!value) return '';
+  const fromPath = value.match(/\/code\/([^/?#\s]+)/i);
+  if (fromPath) return decodeURIComponent(fromPath[1]);
+  const from32t = value.match(/32t\.cn\/static\/code\/([^/?#\s]+)/i);
+  if (from32t) return decodeURIComponent(from32t[1]);
+  return value.split(/[/?#\s]+/).pop() || value;
+}
 
-        <div class="field">
-          <label for="token-input">토큰</label>
-          <input id="token-input" type="text" placeholder="토큰 입력" autocomplete="off" />
-        </div>
+function buildGuestLink(req, token) {
+  const base = process.env.SITE_URL || `${req.protocol}://${req.get('host')}`;
+  return `${base.replace(/\/$/, '')}/code/${encodeURIComponent(token)}`;
+}
 
-        <div class="result" id="result">
-          <div class="result-label">손님에게 보낼 링크</div>
-          <div class="result-link" id="result-link"></div>
-          <div class="actions">
-            <button type="button" class="btn btn-primary" id="copy-btn">링크 복사</button>
-            <button type="button" class="btn btn-secondary" id="open-btn">페이지 열기</button>
-          </div>
-        </div>
+function renderLoginPage(errorMessage = '') {
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <title>로그인</title>
+  <style>${getSharedStyles()}
+    .login-form { margin-top: 8px; }
+    .login-error {
+      margin-bottom: 16px; padding: 10px 12px; border-radius: 10px;
+      background: #fff1f0; color: #ff3b30; font-size: 0.8125rem; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <p class="site">keyview.online</p>
+    <h1 class="title">관리자 로그인</h1>
+    <p class="subtitle">링크 관리 페이지입니다</p>
+    ${errorMessage ? `<p class="login-error">${errorMessage}</p>` : ''}
+    <form class="login-form" method="POST" action="/login">
+      <label class="field-label" for="username">아이디</label>
+      <input class="input" id="username" name="username" type="text" autocomplete="username" required />
+      <label class="field-label" for="password" style="margin-top:20px">비밀번호</label>
+      <input class="input" id="password" name="password" type="password" autocomplete="current-password" required />
+      <div class="btn-row">
+        <button type="submit" class="btn btn-primary">로그인</button>
       </div>
+    </form>
+  </div>
+</body>
+</html>`;
+}
 
-      <div class="toast" id="toast">링크가 복사되었습니다!</div>
+function renderDashboardPage() {
+  return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#ffffff">
+  <title>링크 관리</title>
+  <style>${getSharedStyles()}
+    .top-bar {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 28px;
+    }
+    .logout-btn {
+      background: none; border: none; color: var(--muted);
+      font-size: 0.8125rem; cursor: pointer; padding: 8px 0;
+    }
+    .section { margin-top: 32px; padding-top: 28px; border-top: 1px solid var(--line); }
+    .section-title { font-size: 0.875rem; font-weight: 600; margin-bottom: 16px; }
+    .saved-list { display: flex; flex-direction: column; gap: 12px; }
+    .saved-item {
+      padding: 14px 0; border-bottom: 1px solid var(--line);
+    }
+    .saved-item:last-child { border-bottom: none; }
+    .saved-label { font-size: 0.8125rem; font-weight: 600; margin-bottom: 4px; }
+    .saved-url {
+      font-size: 0.75rem; color: var(--muted); word-break: break-all;
+      line-height: 1.45; margin-bottom: 10px;
+    }
+    .saved-meta { font-size: 0.6875rem; color: #c7c7cc; margin-bottom: 10px; }
+    .saved-actions { display: flex; gap: 16px; }
+    .link-action {
+      background: none; border: none; padding: 0;
+      font-size: 0.8125rem; font-weight: 500; cursor: pointer;
+    }
+    .link-action.copy { color: var(--accent); }
+    .link-action.open { color: var(--muted); }
+    .link-action.delete { color: #ff3b30; }
+    .empty { text-align: center; color: var(--muted); font-size: 0.8125rem; padding: 24px 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="top-bar">
+      <p class="site" style="margin:0">keyview.online</p>
+      <form method="POST" action="/logout"><button type="submit" class="logout-btn">로그아웃</button></form>
+    </div>
 
-      <script>
-        const tokenInput = document.getElementById('token-input');
-        const resultBox = document.getElementById('result');
-        const resultLink = document.getElementById('result-link');
-        const copyBtn = document.getElementById('copy-btn');
-        const openBtn = document.getElementById('open-btn');
-        const toast = document.getElementById('toast');
+    <h1 class="title">링크 만들기</h1>
+    <p class="subtitle">토큰으로 손님용 링크를 생성·저장합니다</p>
 
-        function extractToken(raw) {
-          const value = raw.trim();
-          if (!value) return '';
+    <label class="field-label" for="token-input">토큰</label>
+    <input class="input" id="token-input" type="text" placeholder="토큰 입력" autocomplete="off" autocapitalize="off" spellcheck="false" />
 
-          const fromPath = value.match(/\\/code\\/([^/?#\\s]+)/i);
-          if (fromPath) return decodeURIComponent(fromPath[1]);
+    <label class="field-label" for="label-input" style="margin-top:20px">메모 (선택)</label>
+    <input class="input" id="label-input" type="text" placeholder="예: 홍길동 손님" autocomplete="off" />
 
-          const from32t = value.match(/32t\\.cn\\/static\\/code\\/([^/?#\\s]+)/i);
-          if (from32t) return decodeURIComponent(from32t[1]);
+    <div class="link-preview" id="preview">
+      <p class="link-preview-label">생성된 링크</p>
+      <p class="link-preview-url" id="preview-link"></p>
+    </div>
 
-          return value.split(/[\\/?#\\s]+/).pop() || value;
-        }
+    <div class="btn-row">
+      <button type="button" class="btn btn-primary" id="save-btn" disabled>링크 저장</button>
+      <button type="button" class="btn btn-text" id="copy-btn" disabled>복사</button>
+    </div>
 
-        function buildLink(token) {
-          return location.origin + '/code/' + encodeURIComponent(token);
-        }
+    <div class="section">
+      <p class="section-title">저장된 링크</p>
+      <div class="saved-list" id="saved-list">
+        <p class="empty">불러오는 중…</p>
+      </div>
+    </div>
+  </div>
 
-        function showToast(message) {
-          toast.textContent = message;
-          toast.classList.add('show');
-          setTimeout(() => toast.classList.remove('show'), 2500);
-        }
+  <div class="toast" id="toast">복사되었습니다</div>
 
-        function updateLink() {
-          const token = extractToken(tokenInput.value);
-          if (!token) {
-            resultBox.classList.remove('show');
-            return;
-          }
+  <script>
+    const tokenInput = document.getElementById('token-input');
+    const labelInput = document.getElementById('label-input');
+    const previewBox = document.getElementById('preview');
+    const previewLink = document.getElementById('preview-link');
+    const saveBtn = document.getElementById('save-btn');
+    const copyBtn = document.getElementById('copy-btn');
+    const savedList = document.getElementById('saved-list');
+    const toast = document.getElementById('toast');
 
-          const link = buildLink(token);
-          resultLink.textContent = link;
-          resultBox.classList.add('show');
-          openBtn.onclick = () => { location.href = link; };
-        }
+    let currentLink = '';
 
-        async function copyLink() {
-          const token = extractToken(tokenInput.value);
-          if (!token) return;
+    function extractToken(raw) {
+      const value = raw.trim();
+      if (!value) return '';
+      const fromPath = value.match(/\\/code\\/([^/?#\\s]+)/i);
+      if (fromPath) return decodeURIComponent(fromPath[1]);
+      const from32t = value.match(/32t\\.cn\\/static\\/code\\/([^/?#\\s]+)/i);
+      if (from32t) return decodeURIComponent(from32t[1]);
+      return value.split(/[\\/?#\\s]+/).pop() || value;
+    }
 
-          const link = buildLink(token);
-          try {
-            await navigator.clipboard.writeText(link);
-          } catch {
-            const textarea = document.createElement('textarea');
-            textarea.value = link;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
-          }
-          showToast('링크가 복사되었습니다!');
-        }
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      setTimeout(function() { toast.classList.remove('show'); }, 2500);
+    }
 
-        tokenInput.addEventListener('input', updateLink);
-        copyBtn.addEventListener('click', copyLink);
-        tokenInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') copyLink();
+    function updatePreview() {
+      const token = extractToken(tokenInput.value);
+      if (!token) {
+        currentLink = '';
+        previewBox.classList.remove('show');
+        saveBtn.disabled = true;
+        copyBtn.disabled = true;
+        return;
+      }
+      currentLink = location.origin + '/code/' + encodeURIComponent(token);
+      previewLink.textContent = currentLink;
+      previewBox.classList.add('show');
+      saveBtn.disabled = false;
+      copyBtn.disabled = false;
+    }
+
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        var t = document.createElement('textarea');
+        t.value = text;
+        t.style.position = 'fixed';
+        t.style.opacity = '0';
+        document.body.appendChild(t);
+        t.select();
+        document.execCommand('copy');
+        document.body.removeChild(t);
+      }
+      showToast('복사되었습니다');
+    }
+
+    function formatDate(iso) {
+      return new Date(iso).toLocaleString('ko-KR', { hour12: false });
+    }
+
+    function renderSavedLinks(links) {
+      if (!links.length) {
+        savedList.innerHTML = '<p class="empty">저장된 링크가 없습니다</p>';
+        return;
+      }
+      savedList.innerHTML = links.map(function(item) {
+        var label = item.label ? '<p class="saved-label">' + item.label + '</p>' : '';
+        return '<div class="saved-item" data-id="' + item.id + '">' +
+          label +
+          '<p class="saved-url">' + item.url + '</p>' +
+          '<p class="saved-meta">' + formatDate(item.createdAt) + '</p>' +
+          '<div class="saved-actions">' +
+          '<button type="button" class="link-action copy" data-url="' + item.url + '">복사</button>' +
+          '<button type="button" class="link-action open" data-url="' + item.url + '">열기</button>' +
+          '<button type="button" class="link-action delete" data-id="' + item.id + '">삭제</button>' +
+          '</div></div>';
+      }).join('');
+    }
+
+    async function loadLinks() {
+      const res = await fetch('/api/links');
+      if (res.status === 401) { location.href = '/login'; return; }
+      const data = await res.json();
+      renderSavedLinks(data.links || []);
+    }
+
+    saveBtn.addEventListener('click', async function() {
+      const token = extractToken(tokenInput.value);
+      if (!token) return;
+      saveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/links', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: token, label: labelInput.value.trim() }),
         });
-      </script>
-    </body>
-    </html>
-  `);
+        if (res.status === 401) { location.href = '/login'; return; }
+        if (!res.ok) throw new Error('save failed');
+        labelInput.value = '';
+        showToast('저장되었습니다');
+        loadLinks();
+      } catch {
+        showToast('저장 실패');
+      } finally {
+        saveBtn.disabled = !extractToken(tokenInput.value);
+      }
+    });
+
+    copyBtn.addEventListener('click', function() {
+      if (currentLink) copyText(currentLink);
+    });
+
+    savedList.addEventListener('click', async function(e) {
+      const copyEl = e.target.closest('.copy');
+      const openEl = e.target.closest('.open');
+      const deleteEl = e.target.closest('.delete');
+      if (copyEl) return copyText(copyEl.dataset.url);
+      if (openEl) return void (location.href = openEl.dataset.url);
+      if (deleteEl) {
+        if (!confirm('삭제할까요?')) return;
+        const res = await fetch('/api/links/' + deleteEl.dataset.id, { method: 'DELETE' });
+        if (res.status === 401) { location.href = '/login'; return; }
+        loadLinks();
+        showToast('삭제되었습니다');
+      }
+    });
+
+    tokenInput.addEventListener('input', updatePreview);
+    loadLinks();
+  </script>
+</body>
+</html>`;
+}
+
+app.get('/login', (req, res) => {
+  if (getSessionUser(req)) return res.redirect('/');
+  res.status(200).send(renderLoginPage());
+});
+
+app.post('/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!authenticate(username, password)) {
+    return res.status(401).send(renderLoginPage('아이디 또는 비밀번호가 올바르지 않습니다.'));
+  }
+  setAuthCookie(res, createToken(username));
+  return res.redirect('/');
+});
+
+app.post('/logout', (req, res) => {
+  clearAuthCookie(res);
+  res.redirect('/login');
+});
+
+app.get('/', requireAuth, (_req, res) => {
+  res.status(200).send(renderDashboardPage());
+});
+
+app.get('/api/links', requireAuth, async (_req, res) => {
+  try {
+    const links = await linkStorage.getLinks();
+    res.json({ links });
+  } catch {
+    res.status(500).json({ error: '링크를 불러오지 못했습니다.' });
+  }
+});
+
+app.post('/api/links', requireAuth, async (req, res) => {
+  const token = extractToken(req.body?.token);
+  if (!token) return res.status(400).json({ error: '토큰이 필요합니다.' });
+
+  try {
+    const entry = await linkStorage.addLink({
+      token,
+      url: buildGuestLink(req, token),
+      label: String(req.body?.label || '').trim(),
+    });
+    res.status(201).json({ link: entry });
+  } catch {
+    res.status(500).json({ error: '링크를 저장하지 못했습니다.' });
+  }
+});
+
+app.delete('/api/links/:id', requireAuth, async (req, res) => {
+  try {
+    const deleted = await linkStorage.deleteLink(req.params.id);
+    if (!deleted) return res.status(404).json({ error: '링크를 찾을 수 없습니다.' });
+    res.json({ ok: true });
+  } catch {
+    res.status(500).json({ error: '링크를 삭제하지 못했습니다.' });
+  }
 });
 
 app.get('/api/code/:token', async (req, res) => {
